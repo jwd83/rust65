@@ -48,7 +48,7 @@ impl CPU {
                 y: 0,
                 flags: 0, // see obelisk 6502 register docs
                 pc: 0,
-                sp: 0,
+                sp: 0,  // stack pointer sets to FF on boot
             },
             memory:[0; (1 << 16)],
         }
@@ -62,6 +62,7 @@ impl CPU {
         let pl = u16::from(self.memory[0xFFFC]);         // low byte
         let ph = u16::from(self.memory[0xFFFD]) << 8;    // high byte
 
+        self.registers.sp = 0xFF; // stack pointer set to FF on boot
         self.registers.pc = pl | ph;
     }
 
@@ -69,12 +70,12 @@ impl CPU {
         println!("========================================================");
         println!("Register dump");
         println!("--------------------------------------------------------");
-        println!("A:        {}", self.registers.a);
-        println!("X:        {}", self.registers.x);
-        println!("Y:        {}", self.registers.y);
-        println!("PC:       {}", self.registers.pc);
-        println!("SP:       {}", self.registers.sp);
-        println!("Flags:    {}", self.registers.flags);
+        println!("PC:       0x {:04X}", self.registers.pc);
+        println!("A:        0x   {:02X}", self.registers.a);
+        println!("X:        0x   {:02X}", self.registers.x);
+        println!("Y:        0x   {:02X}", self.registers.y);
+        println!("SP:       0x   {:02X}", self.registers.sp);
+        println!("Flags:    0x   {:02X}", self.registers.flags);
     }
 
     fn dump_page(&mut self, page: u8) {
@@ -134,14 +135,14 @@ impl CPU {
         // HEX  BIN        Length    Addressing Mode
         //       76543210
         // -------------------------------------------------
-        // x69  b01101001  2        Immediate
-        // x65  b01100101  2        Zero Page
-        // x75  b01110101  2        Zero Page,X
-        // x6D  b01101101  3        Absolute
-        // x7D  b01111101  3        Absolute,X
-        // x79  b01111001  3        Absolute,Y
-        // x61  b01100001  2        (Indirect,X)
-        // x71  b01110001  2        (Indirect),Y
+        // x69  b01101001  2         Immediate
+        // x65  b01100101  2         Zero Page
+        // x75  b01110101  2         Zero Page,X
+        // x6D  b01101101  3         Absolute
+        // x7D  b01111101  3         Absolute,X
+        // x79  b01111001  3         Absolute,Y
+        // x61  b01100001  2         (Indirect,X)
+        // x71  b01110001  2         (Indirect),Y
         // -------------------------------------------------
 
         // -------------------------------------------------
@@ -150,10 +151,10 @@ impl CPU {
         // Opcode          Byte
         // HEX  BIN        Length    Addressing Mode
         // -------------------------------------------------
-        // xE6  b--------  2        Zero Page
-        // xF6  b--------  2        Zero Page,X
-        // xEE  b--------  3        Absolute
-        // xFE  b--------  3        Absolute,X
+        // xE6  b--------  2         Zero Page
+        // xF6  b--------  2         Zero Page,X
+        // xEE  b--------  3         Absolute
+        // xFE  b--------  3         Absolute,X
         if opcode == 0xE6  {
             advance = 2;
             self.memory[bp1 as usize] = self.memory[bp1 as usize].wrapping_add(1);
@@ -165,8 +166,8 @@ impl CPU {
         // Opcode          Byte
         // HEX  BIN        Length    Addressing Mode
         // -------------------------------------------------
-        // x4C  b01001000  3        Absolute
-        // x6C  b01101000  3        Indirect
+        // x4C  b01001000  3         Absolute
+        // x6C  b01101000  3         Indirect
         if opcode == 0x4C {
             advance = 0;
             self.registers.pc = offset;
@@ -183,14 +184,14 @@ impl CPU {
         // Opcode          Byte
         // HEX  BIN        Length    Addressing Mode
         // -------------------------------------------------
-        // xA9  b10101001  2        Immediate
-        // xA5  b10100101  2        Zero Page
-        // xB5  b10110101  2        Zero Page,X
-        // xAD  b10101101  3        Absolute
-        // xBD  b10111101  3        Absolute,X
-        // xB9  b10111001  3        Absolute,Y
-        // xA1  b10100001  2        (Indirect,X)
-        // xB1  b10110001  2        (Indirect),Y
+        // xA9  b10101001  2         Immediate
+        // xA5  b10100101  2         Zero Page
+        // xB5  b10110101  2         Zero Page,X
+        // xAD  b10101101  3         Absolute
+        // xBD  b10111101  3         Absolute,X
+        // xB9  b10111001  3         Absolute,Y
+        // xA1  b10100001  2         (Indirect,X)
+        // xB1  b10110001  2         (Indirect),Y
         // -------------------------------------------------
         if opcode == 0xA9 {
             advance = 2;
@@ -205,6 +206,37 @@ impl CPU {
         if opcode == 0xAD {
             advance = 2;
             self.registers.a = self.memory[offset as usize];
+        }
+
+        // -------------------------------------------------
+        // PHA - Push Accumulator
+        // Pushes a copy of the accumulator on to the stack.
+        // -------------------------------------------------
+        // Opcode          Byte
+        // HEX  BIN        Length    Addressing Mode
+        // -------------------------------------------------
+        // x48  b01001000  1         Implied
+
+        if opcode == 0x48 {
+            advance = 1;
+            let full_stack_address = (0x0100 as u16 | (self.registers.sp as u16)) as usize;
+            self.memory[full_stack_address] = self.registers.a;
+            self.registers.sp = self.registers.sp.wrapping_sub(1);
+        }
+
+        // -------------------------------------------------
+        // PLA - Pull Accumulator
+        // Pulls an 8 bit value from the stack and into
+        // the accumulator.
+        // -------------------------------------------------
+        // Opcode          Byte
+        // HEX  BIN        Length    Addressing Mode
+        // -------------------------------------------------
+        // x68  b01001000  1         Implied
+        if opcode == 0x68 {
+            advance = 1;
+            self.registers.a = self.memory[(0x0100 as u16 | (self.registers.sp as u16)) as usize];
+            self.registers.sp = self.registers.sp.wrapping_add(1);
         }
 
         // -------------------------------------------------
@@ -223,6 +255,7 @@ fn pause() {
     stdout.write(b"Press Enter to continue...").unwrap();
     stdout.flush().unwrap();
     stdin().read(&mut [0]).unwrap();
+    println!("");
 }
 
 fn pretty_print_int(i: isize) {
@@ -245,43 +278,42 @@ fn main() {
 
     println!("6502 CPU Emulator");
 
-    println!("Pre-Boot registers");
-    mos.dump_registers();
-
     // write a custom reset vector to the memory
     // set reset vector
     mos.memory[0xFFFC] = 0x00;
     mos.memory[0xFFFD] = 0x02;
 
     // set a custom JMP address for JMP indirect
-    mos.memory[0x0500] = 0x00;
+    mos.memory[0x0500] = 0x02;  // this will skip the load 69 into a instruction
     mos.memory[0x0501] = 0x02;
 
-    // LDA #$69
-    mos.memory[0x0200] = 0xA9;
+    // beginning of program memory
+    mos.memory[0x0200] = 0xA9;          // LDA #$69
     mos.memory[0x0201] = 0x69;
 
-    // INC $00
-    mos.memory[0x0202] = 0xE6;
+    mos.memory[0x0202] = 0xE6;          // INC $00
     mos.memory[0x0203] = 0x00;
 
-    // INC $00
-    mos.memory[0x0204] = 0xE6;
+    mos.memory[0x0204] = 0xE6;          // INC $00
     mos.memory[0x0205] = 0x00;
 
-    // INC $01
-    mos.memory[0x0206] = 0xE6;
+    mos.memory[0x0206] = 0xE6;          // INC $01
     mos.memory[0x0207] = 0x01;
 
-    // JMP $0200
-    // mos.memory[0x0208] = 0x4C;
-    // mos.memory[0x0209] = 0x00; // account for endianness
-    // mos.memory[0x020A] = 0x02;
+    mos.memory[0x0208] = 0x48;          // PHA
+
+    mos.memory[0x0209] = 0xA5;          // LDA $01
+    mos.memory[0x020A] = 0x01;
+
+    // JMP $0300
+    mos.memory[0x020B] = 0x4C;
+    mos.memory[0x020C] = 0x00; // account for endianness
+    mos.memory[0x020D] = 0x03;
 
     // JMP ($0500) - Jump the the address specified at 0500
-    mos.memory[0x0208] = 0x6C;
-    mos.memory[0x0209] = 0x00; // account for endianness
-    mos.memory[0x020A] = 0x05;
+    mos.memory[0x0300] = 0x6C;
+    mos.memory[0x0301] = 0x00; // account for endianness
+    mos.memory[0x0302] = 0x05;
 
 
 
@@ -290,21 +322,16 @@ fn main() {
     println!("Post-Boot registers");
     mos.dump_registers();
     mos.dump_page(0);
-    // start execution of first instruction
-    println!("Starting execution");
-    mos.step();
+    mos.dump_page(1);
 
-    // display contents of registers after first instruction
-    mos.dump_registers();
-    mos.dump_page(0);
-
-    // run the first 20 instrcutions by hand
-
-    for n in 1..20 {
+    // run the first batch instructions by hand
+    for _n in 1..20 {
+        println!("Execution halted. PC at 0x{:04X}", mos.registers.pc);
         pause();
         mos.step();
         mos.dump_registers();
         mos.dump_page(0);
+        mos.dump_page(1);
     }
 
     println!("Running 1 second benchmark...");
@@ -317,11 +344,11 @@ fn main() {
         mos.step();
         instructions += 1;
     }
-    pretty_print_int(instructions as isize);
-    println!(" instructions in 1 second");
-
     // dump the contents of registers and the 0 page after the benchmark concludes
     mos.dump_registers();
     mos.dump_page(0);
-
+    mos.dump_page(1);
+    // display the number of instructions executed
+    pretty_print_int(instructions as isize);
+    println!(" instructions in 1 second");
 }
