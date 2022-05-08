@@ -1,4 +1,6 @@
-use std::time::Instant;
+use std::time::{Instant, Duration};
+use std::io::{stdin, stdout, Read, Write};
+
 
 
 // obelisk's notes
@@ -112,6 +114,9 @@ impl CPU {
         let bp1 = self.memory[((self.registers.pc as u32 + 1 as u32) & 0xFFFF) as usize];
         let bp2 = self.memory[((self.registers.pc as u32 + 2 as u32) & 0xFFFF) as usize];
         let offset = u16::from(bp1) | (u16::from(bp2) << 8);
+        let offset_plus_one = offset.wrapping_add(1);
+        let indirect_byte = self.memory[offset as usize];
+        let indirect_addr = u16::from(indirect_byte) | (u16::from(self.memory[offset_plus_one as usize]) << 8);
 
         // check if opcode is a single byte instruction... NOP/SEI/CEI/CLI/CLC/CLV/SEC/SED
         // .. check if opcode is immediate mode or not...
@@ -155,6 +160,24 @@ impl CPU {
         }
 
         // -------------------------------------------------
+        // JMP - Jump (sets the program counter)
+        // -------------------------------------------------
+        // Opcode          Byte
+        // HEX  BIN        Length    Addressing Mode
+        // -------------------------------------------------
+        // x4C  b01001000  3        Absolute
+        // x6C  b01101000  3        Indirect
+        if opcode == 0x4C {
+            advance = 0;
+            self.registers.pc = offset;
+        }
+
+        if opcode == 0x6C {
+            advance = 0;
+            self.registers.pc = indirect_addr;
+        }
+
+        // -------------------------------------------------
         // LDA - Load Accumulator (register A)
         // -------------------------------------------------
         // Opcode          Byte
@@ -195,6 +218,26 @@ impl CPU {
     }
 }
 
+fn pause() {
+    let mut stdout = stdout();
+    stdout.write(b"Press Enter to continue...").unwrap();
+    stdout.flush().unwrap();
+    stdin().read(&mut [0]).unwrap();
+}
+
+fn pretty_print_int(i: isize) {
+    let mut s = String::new();
+    let i_str = i.to_string();
+    let a = i_str.chars().rev().enumerate();
+    for (idx, val) in a {
+        if idx != 0 && idx % 3 == 0 {
+            s.insert(0, ',');
+        }
+        s.insert(0, val);
+    }
+    print!("{}", s);
+}
+
 fn main() {
 
     let mut mos = CPU::new();
@@ -209,6 +252,10 @@ fn main() {
     // set reset vector
     mos.memory[0xFFFC] = 0x00;
     mos.memory[0xFFFD] = 0x02;
+
+    // set a custom JMP address for JMP indirect
+    mos.memory[0x0500] = 0x00;
+    mos.memory[0x0501] = 0x02;
 
     // LDA #$69
     mos.memory[0x0200] = 0xA9;
@@ -226,28 +273,55 @@ fn main() {
     mos.memory[0x0206] = 0xE6;
     mos.memory[0x0207] = 0x01;
 
+    // JMP $0200
+    // mos.memory[0x0208] = 0x4C;
+    // mos.memory[0x0209] = 0x00; // account for endianness
+    // mos.memory[0x020A] = 0x02;
+
+    // JMP ($0500) - Jump the the address specified at 0500
+    mos.memory[0x0208] = 0x6C;
+    mos.memory[0x0209] = 0x00; // account for endianness
+    mos.memory[0x020A] = 0x05;
+
+
+
+    // boot the cpu
     mos.boot();
     println!("Post-Boot registers");
     mos.dump_registers();
     mos.dump_page(0);
-
     // start execution of first instruction
+    println!("Starting execution");
     mos.step();
 
     // display contents of registers after first instruction
     mos.dump_registers();
+    mos.dump_page(0);
+
+    // run the first 20 instrcutions by hand
+
+    for n in 1..20 {
+        pause();
+        mos.step();
+        mos.dump_registers();
+        mos.dump_page(0);
+    }
+
+    println!("Running 1 second benchmark...");
 
     // benchmark the emulator
-    let benchmark_start = Instant::now();
-    for n in 1..2500000u64 {
+    let instant = Instant::now();
+    let one_second = Duration::from_secs(1);
+    let mut instructions = 0u64;
+    while instant.elapsed() < one_second {
         mos.step();
+        instructions += 1;
     }
-    let benchmark_end = Instant::now();
+    pretty_print_int(instructions as isize);
+    println!(" instructions in 1 second");
 
     // dump the contents of registers and the 0 page after the benchmark concludes
     mos.dump_registers();
     mos.dump_page(0);
-
-    println!("{:?}", benchmark_end.duration_since(benchmark_start));
 
 }
