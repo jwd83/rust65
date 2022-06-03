@@ -29,9 +29,15 @@ struct Registers {
     a: u8,
     x: u8,
     y: u8,
-    flags: u8,
     pc: u16,
     sp: u8,
+    flag_carry: bool,
+    flag_zero: bool,
+    flag_interrupt_disable: bool,
+    flag_decimal_mode: bool,
+    flag_break_command: bool,
+    flag_overflow: bool,
+    flag_negative: bool,
 }
 
 struct CPU {
@@ -46,9 +52,15 @@ impl CPU {
                 a: 0,
                 x: 0,
                 y: 0,
-                flags: 0, // see obelisk 6502 register docs
                 pc: 0,
                 sp: 0,  // stack pointer sets to FF on boot
+                flag_carry: false,
+                flag_zero: false,
+                flag_interrupt_disable: false,
+                flag_decimal_mode: false,
+                flag_break_command: false,
+                flag_overflow: false,
+                flag_negative: false,
             },
             memory:[0; (1 << 16)],
         }
@@ -68,14 +80,24 @@ impl CPU {
 
     fn dump_registers(&mut self) {
         println!("========================================================");
-        println!("Register dump");
+        println!("Registers");
         println!("--------------------------------------------------------");
         println!("PC:       0x {:04X}", self.registers.pc);
         println!("A:        0x   {:02X}", self.registers.a);
         println!("X:        0x   {:02X}", self.registers.x);
         println!("Y:        0x   {:02X}", self.registers.y);
         println!("SP:       0x   {:02X}", self.registers.sp);
-        println!("Flags:    0x   {:02X}", self.registers.flags);
+        println!("--------------------------------------------------------");
+        println!("Flags");
+        println!("--------------------------------------------------------");
+        println!("Carry:                {}", self.registers.flag_carry);
+        println!("Zero:                 {}", self.registers.flag_zero);
+        println!("Interrupt Disable:    {}", self.registers.flag_interrupt_disable);
+        println!("Decimal:              {}", self.registers.flag_decimal_mode);
+        println!("Break:                {}", self.registers.flag_break_command);
+        println!("Overflow:             {}", self.registers.flag_overflow);
+        println!("Negative:             {}", self.registers.flag_negative);
+
     }
 
     fn dump_page(&mut self, page: u8) {
@@ -108,8 +130,6 @@ impl CPU {
     fn step(&mut self) {
 
         let mut advance =       1u16;   // default to 1 byte instruction length. branches/jumps should set this to 0
-        let mut flag_mask =     0u8;    // flags that can be affected by this instruction
-        let mut flag_output =   0u8;    // flags that are set by this instruction
 
         let opcode = self.memory[self.registers.pc as usize];
         let bp1 = self.memory[((self.registers.pc as u32 + 1 as u32) & 0xFFFF) as usize];
@@ -156,8 +176,18 @@ impl CPU {
         // xEE  b--------  3         Absolute
         // xFE  b--------  3         Absolute,X
         if opcode == 0xE6  {
+            // instruction length is 2 bytes
             advance = 2;
+
+            // increment the byte at address bp1
+            // addressing mode is zero page
             self.memory[bp1 as usize] = self.memory[bp1 as usize].wrapping_add(1);
+
+            // set zero flag if result is zero
+            self.registers.flag_zero = self.memory[bp1 as usize] == 0;
+
+            // set negative flag if result is negative (bit 7 set)
+            self.registers.flag_negative = self.memory[bp1 as usize] & 0x80 != 0;
         }
 
         // -------------------------------------------------
@@ -169,6 +199,7 @@ impl CPU {
         // x4C  b01001000  3         Absolute
         // x6C  b01101000  3         Indirect
         if opcode == 0x4C {
+            // instruction length should be set to 0 so we don't increment the program counter after the JMP executes
             advance = 0;
             self.registers.pc = offset;
         }
@@ -196,16 +227,38 @@ impl CPU {
         if opcode == 0xA9 {
             advance = 2;
             self.registers.a = bp1;
+
+            // set zero flag if result is zero
+            self.registers.flag_zero = bp1 == 0;
+            // set negative flag if result is negative (bit 7 set)
+            self.registers.flag_negative = bp1 & 0x80 != 0;
         }
 
         if opcode == 0xA5 {
             advance = 2;
+
+            // load accumulator with 8 bit address value "bp1" from the zero page
             self.registers.a = self.memory[bp1 as usize];
+
+            // set zero flag if result is zero
+            self.registers.flag_zero = self.memory[bp1 as usize] == 0;
+
+            // set negative flag if result is negative (bit 7 set)
+            self.registers.flag_negative = self.memory[bp1 as usize] & 0x80 != 0;
         }
 
         if opcode == 0xAD {
             advance = 2;
+
+            // load the accumulator with the 16 bit address value "offset"
             self.registers.a = self.memory[offset as usize];
+
+            // set zero flag if result is zero
+            self.registers.flag_zero = self.memory[offset as usize] == 0;
+
+            // set negative flag if result is negative (bit 7 set)
+            self.registers.flag_negative = self.memory[offset as usize] & 0x80 != 0;
+
         }
 
         // -------------------------------------------------
@@ -218,10 +271,19 @@ impl CPU {
         // x48  b01001000  1         Implied
 
         if opcode == 0x48 {
+            // instruction length is 1 byte
             advance = 1;
+
+            // compute the full stack address
             let full_stack_address = (0x0100 as u16 | (self.registers.sp as u16)) as usize;
+
+            // write the value of the accumulator to the full stack address
             self.memory[full_stack_address] = self.registers.a;
+
+            // decrement the stack pointer
             self.registers.sp = self.registers.sp.wrapping_sub(1);
+
+            // this instruction does not modify the processor flags
         }
 
         // -------------------------------------------------
@@ -234,9 +296,20 @@ impl CPU {
         // -------------------------------------------------
         // x68  b01001000  1         Implied
         if opcode == 0x68 {
+            // instruction length is 1 byte
             advance = 1;
+
+            // load the accumulator with the value at the stack pointer
             self.registers.a = self.memory[(0x0100 as u16 | (self.registers.sp as u16)) as usize];
+
+            // increment the stack pointer address
             self.registers.sp = self.registers.sp.wrapping_add(1);
+
+            // set zero flag if result is zero
+            self.registers.flag_zero = self.registers.a == 0;
+
+            // set negative flag if result is negative (bit 7 set)
+            self.registers.flag_negative = self.registers.a & 0x80 != 0;
         }
 
         // -------------------------------------------------
@@ -244,9 +317,6 @@ impl CPU {
         // todo : compare performance to wrapping add
         // todo : compare performance checking if advance is > 0 . possibly faster branch emulation but slower for everything else.. worth it?
         self.registers.pc = ((self.registers.pc as u32 + advance as u32) & 0xFFFF) as u16;
-
-        // calculate the new flags
-        self.registers.flags = flag_output;
     }
 }
 
@@ -310,7 +380,7 @@ fn main() {
     mos.memory[0x020C] = 0x00; // account for endianness
     mos.memory[0x020D] = 0x03;
 
-    // JMP ($0500) - Jump the the address specified at 0500
+    // JMP ($0500) - Jump to the the address specified at 0500
     mos.memory[0x0300] = 0x6C;
     mos.memory[0x0301] = 0x00; // account for endianness
     mos.memory[0x0302] = 0x05;
